@@ -1,0 +1,56 @@
+{
+    "env": {
+        "browser": true,
+        "node": true,
+        "commonjs": true,
+        "es2021": true
+    },
+    "extends": "eslint:recommended",
+    "parserOptions": {
+        "ecmaVersion": "latest",
+        "sourceType": "module"
+    },
+    "rules": {
+        "indent": [
+            "error",
+            4,
+            {
+                "SwitchCase": 1
+            }
+        ],
+        "quotes": [
+            "error",
+            "double"
+        ],
+        "semi": [
+            "error",
+            "always"
+        ],
+        "no-unused-vars": [
+            "off"
+        ],
+        "prefer-template": [
+            "error"
+        ],
+        "prefer-const": [
+            "error"
+        ],
+        "no-trailing-spaces" : [
+            "error"
+        ],
+        "no-multi-spaces": [
+            "error"
+        ],
+        "object-curly-spacing": [
+            "error",
+            "always"
+        ],
+        "template-curly-spacing": [
+            "error",
+            "never"
+        ],
+        "max-statements-per-line": [
+            "error"
+        ]
+    }
+}
