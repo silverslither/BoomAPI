@@ -9,8 +9,10 @@ const LEN_LB_PLAYERS = NUM_LB_PLAYERS * 68;
 let settingsHash = "00000000";
 
 const REQUESTS = {
-    login: `440000006500000002000000${settingsHash}${Buffer.from(DEVICE_ID).toString("hex")}000000000000000000000000000000000000000000000000000000000000000000000000`,
-    replays_leaderboard: "0c0000006f000000030000000c000000c800000001000000"
+    get login() {
+        return `3c0000006f00000002000000${settingsHash}${Buffer.from(DEVICE_ID).toString("hex")}00000000000000000000000000000000000000000000000000000000`;
+    },
+    replays_leaderboard: "0c0000007900000003000000" + "0c000000d200000001000000"
 };
 
 const INT4_MAX = 2 ** 31 - 1;
@@ -240,7 +242,7 @@ api.get("/decksearch", async (req, res) => {
             return;
         }
         const response = await sqlPool.query({
-            text: `SELECT id, wins, losses, draws, rating FROM decks${table} WHERE match_ba_deck(id, $1::int4[]) ORDER BY wins + losses + draws DESC LIMIT 20`,
+            text: `SELECT id, wins, losses, draws, rating FROM decks${table} WHERE match_ba_deck(id::text, $1::int4[]) ORDER BY wins + losses + draws DESC LIMIT 20`,
             values: [cards]
         });
         res.json(response.rows);
@@ -315,7 +317,7 @@ api.get("*", (_req, res) => {
     res.status(404).send("404 Not Found");
 });
 
-initSql();
+await initSql();
 
 const server = api.listen(EXPRESS_PORT, () => {
     const port = server.address().port;
@@ -333,8 +335,8 @@ async function query() {
         Time: Date.now()
     })}`)).json();
 
-    const HOST = server.ServerAddress;
-    const PORT = server.ServerPort;
+    let HOST = server.ServerAddress;
+    let PORT = server.ServerPort;
 
     let failcount = 1;
     let topmedals = 0;
@@ -349,7 +351,7 @@ async function query() {
                         console.error(`warning: unable to parse response, retrying requests at ${new Date().toLocaleString("en-CA")}`);
                         fs.writeFileSync("invalid_response_log.bin", response);
                         continue;
-                    default: {
+                    case 1: {
                         console.error(`warning: unable to parse response, trying settings hash update at ${new Date().toLocaleString("en-CA")}`);
                         const settings = parseSettings(await getSettings(PORT, HOST));
 
@@ -364,7 +366,22 @@ async function query() {
                         settingsHash = tmpbuf.toString("hex");
 
                         console.error(`got hash ${settingsHash}, retrying requests at ${new Date().toLocaleString("en-CA")}`);
-                        REQUESTS.login = `440000006500000002000000${settingsHash}${Buffer.from(DEVICE_ID).toString("hex")}000000000000000000000000000000000000000000000000000000000000000000000000`;
+                        continue;
+                    }
+                    case 2: {
+                        console.error(`warning: unable to parse response, refetching server details at ${new Date().toLocaleString("en-CA")}`);
+                        const server = await (await fetch(`http://circlebox.net/boom_arena/api/api_auto_update.php?${new URLSearchParams({
+                            Mode: 0,
+                            Os: 2,
+                            DeviceId: DEVICE_ID,
+                            Lang: "english",
+                            ClientVersion: "",
+                            Time: Date.now()
+                        })}`)).json();
+
+                        HOST = server.ServerAddress;
+                        PORT = server.ServerPort;
+                        failcount = 0;
                         continue;
                     }
                 }
@@ -682,14 +699,14 @@ function parseResponse(buf) {
     let i;
 
     for (i = 0; i < LEN_REPLAYS; i += 168) {
-        if (buf.readInt32LE(i) !== 0xa8 || buf.readInt32LE(i + 4) !== 0xca || buf.readInt32LE(i + 8) !== 0x01)
+        if (buf.readInt32LE(i) !== 0xa8 || buf.readInt32LE(i + 4) !== 0xd4 || buf.readInt32LE(i + 8) !== 0x01)
             return null;
 
         replays.push(parseReplay(buf.subarray(i)));
     }
 
     for (; i < LEN_REPLAYS + LEN_LB_PLAYERS; i += 68) {
-        if (buf.readInt32LE(i) !== 0x44 || buf.readInt32LE(i + 4) !== 0xc9 || buf.readInt32LE(i + 8) !== 0x01)
+        if (buf.readInt32LE(i) !== 0x44 || buf.readInt32LE(i + 4) !== 0xd3 || buf.readInt32LE(i + 8) !== 0x01)
             return null;
 
         leaderboards.push(parseLeaderboard(buf.subarray(i)));
@@ -703,7 +720,7 @@ function parseResponse(buf) {
     FORMAT: [content](bytes)
     LITTLE ENDIAN
 
-    [a8 00 00 00 ca 00 00 00 01 00 00 00](12) // header     0
+    [a8 00 00 00 d4 00 00 00 01 00 00 00](12) // header     0
     [game id](4)                                            12
     [user id 1](4)                                          16
     [user id 2](4)                                          20
@@ -762,7 +779,7 @@ function parseReplay(buf) {
     FORMAT: [content](bytes)
     LITTLE ENDIAN
 
-    [44 00 00 00 c9 00 00 00 01 00 00 00](12) // header     0
+    [44 00 00 00 d3 00 00 00 01 00 00 00](12) // header     0
     [ranking (0 indexed)](4)                                12
     [user id](4)                                            16
     [medals](4)                                             20
@@ -786,7 +803,7 @@ function parseLeaderboard(buf) {
     };
 }
 
-const FIRST_DATA_PACKET = 3;
+const FIRST_DATA_PACKET = 2;
 
 function getResponse(port, host) {
     return new Promise((resolve, reject) => {
@@ -796,14 +813,13 @@ function getResponse(port, host) {
         let datalen = 0;
 
         socket.on("data", (data) => {
-            if (data.readInt32LE(0) === 0x10 && data.readInt32LE(4) === 0x01) {
+            if (data.readInt32LE(0) === 0x10) {
                 if (data.length <= 16)
                     return;
-                if (data.readInt32LE(8) === 0x01)
-                    data = data.subarray(16);
+                data = data.subarray(16);
             }
 
-            if (++received === FIRST_DATA_PACKET - 1)
+            if (++received === 1)
                 socket.write(Buffer.from(REQUESTS.replays_leaderboard, "hex"));
 
             if (received >= FIRST_DATA_PACKET) {
@@ -816,7 +832,8 @@ function getResponse(port, host) {
             }
         });
 
-        socket.on("close", reject);
+        socket.on("error", err => console.error(`socket error: ${err}`));
+        socket.on("close", () => reject("socket close"));
         socket.on("timeout", socket.destroy);
         socket.connect(port, host, () => socket.write(Buffer.from(REQUESTS.login, "hex")));
         setTimeout(() => {
@@ -845,7 +862,7 @@ function parseSettings(buf) {
     const settings = {};
     let temp = [];
     for (let i = 0; i < buf.length - 8; i++) {
-        if (buf.readInt32LE(i) !== 0x67)
+        if (buf.readInt32LE(i) !== 0x71)
             continue;
         switch (buf.readInt32LE(i + 4)) {
             case 0x01:
@@ -882,25 +899,25 @@ function getSettings(port, host) {
         let response = Buffer.alloc(0);
 
         socket.on("data", (data) => {
-            if (data.readInt32LE(0) === 0x10 && data.readInt32LE(4) === 0x01) {
+            if (data.readInt32LE(0) === 0x10) {
                 if (data.length <= 16)
                     return;
-                if (data.readInt32LE(8) === 0x01)
-                    data = data.subarray(16);
+                data = data.subarray(16);
             }
 
             response = Buffer.concat([response, data]);
             if (response.length >= 11 &&
-                (response.readInt32LE(response.length - 8) === 0x67 && response.readInt32LE(response.length - 4) === 0x04) ||
-                (response.readInt32LE(response.length - 9) === 0x67 && response.readInt32LE(response.length - 5) === 0x04) ||
-                (response.readInt32LE(response.length - 10) === 0x67 && response.readInt32LE(response.length - 6) === 0x04) ||
-                (response.readInt32LE(response.length - 11) === 0x67 && response.readInt32LE(response.length - 7) === 0x04)) { // too lazy to figure out where it actually is so i just check everything
+                (response.readInt32LE(response.length - 8) === 0x71 && response.readInt32LE(response.length - 4) === 0x04) ||
+                (response.readInt32LE(response.length - 9) === 0x71 && response.readInt32LE(response.length - 5) === 0x04) ||
+                (response.readInt32LE(response.length - 10) === 0x71 && response.readInt32LE(response.length - 6) === 0x04) ||
+                (response.readInt32LE(response.length - 11) === 0x71 && response.readInt32LE(response.length - 7) === 0x04)) { // too lazy to figure out where it actually is so i just check everything
                 socket.destroy();
                 resolve(response);
             }
         });
 
-        socket.on("close", reject);
+        socket.on("error", err => console.error(`socket error: ${err}`));
+        socket.on("close", () => reject("socket close"));
         socket.on("timeout", socket.destroy);
         socket.connect(port, host, () => socket.write(Buffer.from(REQUESTS.login, "hex")));
 
